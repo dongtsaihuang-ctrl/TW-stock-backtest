@@ -2,171 +2,189 @@ import streamlit as st
 import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
-from data_loader import fetch_stock_data, get_taiwan_50_symbols, get_taiwan_50_info
+from data_loader import fetch_stock_data, get_taiwan_50_symbols, get_taiwan_50_info, get_recent_adjustments
 from strategy import VolumePriceBreakoutStrategy, MACrossoverStrategy
 from backtester import Backtester
 
 # 設定頁面資訊
-st.set_page_config(page_title="Large-Cap Signal Scanner", layout="wide", page_icon="🔍")
+st.set_page_config(page_title="Large-Cap Stock Monitor", layout="wide", page_icon="🔍")
 
-# 獲取名稱對照表
+# --- 1. 定義回呼函數 (Callbacks) ---
+# 回呼函數會在腳本重新執行前執行，避免 StreamlitAPIException
+def handle_nav_click(symbol):
+    st.session_state.symbol_input = symbol
+    st.session_state.mode_radio = "Individual Backtest"
+    st.session_state.trigger_backtest = True
+
+# --- 2. 初始化 Session State ---
+if 'mode_radio' not in st.session_state:
+    st.session_state.mode_radio = "Signal Scanner (Top 50)"
+if 'symbol_input' not in st.session_state:
+    st.session_state.symbol_input = "2330"
+if 'trigger_backtest' not in st.session_state:
+    st.session_state.trigger_backtest = False
+
+# 獲取名稱對照表與變動資訊
 tw50_info = get_taiwan_50_info()
+recent_adjustments = get_recent_adjustments()
 
-st.title("🔍 Taiwan Large-Cap Stock Signal Scanner")
-st.markdown("Scan top 50 large-cap stocks for recent trading signals.")
+# 主標題
+st.title("🔍 Taiwan Stock Signal Scanner & Backtester")
 
-# 側邊欄：功能模式切換
-st.sidebar.header("Mode Selection")
-mode = st.sidebar.radio("Choose Mode", ["Signal Scanner (Top 50)", "Individual Backtest"])
+# 使用 columns 建立主畫面與右側導航欄
+main_col, nav_col = st.columns([4, 1])
 
-if mode == "Individual Backtest":
-    st.sidebar.divider()
-    symbol = st.sidebar.text_input("Stock Symbol", value="2330")
-    start_date = st.sidebar.date_input("Start Date", value=datetime.date(2023, 1, 1))
-    end_date = st.sidebar.date_input("End Date", value=datetime.date.today())
-    
-    # 獲取顯示名稱 (用於 UI)
-    stock_name = tw50_info.get(symbol, "")
-    display_title = f"{symbol} {stock_name}" if stock_name else symbol
-    
-    strategy_name = st.sidebar.selectbox("Select Strategy", ["Volume Price Breakout", "MA Crossover"])
-    if strategy_name == "Volume Price Breakout":
-        pw = st.sidebar.slider("Price High Window", 5, 60, 20)
-        vm = st.sidebar.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
-        strategy_obj = VolumePriceBreakoutStrategy(price_window=pw, volume_multiplier=vm)
+with main_col:
+    # 側邊欄：功能模式切換
+    st.sidebar.header("Navigation")
+    # 元件直接綁定 key
+    mode = st.sidebar.radio(
+        "Choose Mode", 
+        ["Signal Scanner (Top 50)", "Individual Backtest"], 
+        key="mode_radio"
+    )
+
+    # --- 模式說明展示 ---
+    if st.session_state.mode_radio == "Signal Scanner (Top 50)":
+        with st.expander("📖 Mode Description: Signal Scanner", expanded=True):
+            st.info("**掃描儀模式 (Signal Scanner)**: 快速篩選台灣 50 最近出現進場或出場訊號的股票。")
     else:
-        fma = st.sidebar.slider("Fast MA", 5, 20, 5)
-        sma = st.sidebar.slider("Slow MA", 20, 120, 20)
-        strategy_obj = MACrossoverStrategy(fast_ma=fma, slow_ma=sma)
+        with st.expander("📖 Mode Description: Individual Backtest", expanded=True):
+            st.info("**個股回測模式 (Individual Backtest)**: 針對單一股票進行深度策略回測與圖表分析。")
 
-    if st.sidebar.button("Run Backtest"):
-        with st.spinner("Processing..."):
-            df = fetch_stock_data(symbol, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-            if df is not None:
-                df_with_signals = strategy_obj.apply(df)
-                backtester = Backtester()
-                result_data, trades = backtester.run(df_with_signals)
-                perf = backtester.calculate_performance(result_data)
-                
-                # UI 標題可以使用中文
-                st.subheader(f"Results for {display_title}")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Return", f"{perf['Total Return (%)']:.2f}%")
-                c2.metric("MDD", f"{perf['Max Drawdown (%)']:.2f}%")
-                c3.metric("Trades", len(trades))
-                
-                # 視覺化圖表 - 內部標題避免使用中文以防崩潰
-                fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
-                
-                # 子圖 1: 價格與信號
-                ax1.plot(result_data.index, result_data['Close'], label='Close Price', color='blue', alpha=0.5)
-                if not trades.empty:
-                    buy = trades[trades['Type'] == 'BUY']
-                    sell = trades[trades['Type'] == 'SELL']
-                    ax1.scatter(buy['Date'], buy['Price'], marker='^', color='green', s=100, label='Buy')
-                    ax1.scatter(sell['Date'], sell['Price'], marker='v', color='red', s=100, label='Sell')
-                
-                # 圖表內部標題僅使用代碼
-                ax1.set_title(f"Symbol: {symbol} - Price and Signals")
-                ax1.set_ylabel("Price (TWD)")
-                ax1.legend()
-                ax1.grid(True, alpha=0.3)
-                ax1.tick_params(labelbottom=True)
-                
-                # 子圖 2: 資產曲線
-                ax2.plot(result_data.index, result_data['TotalAssets'], color='orange', label='Equity Curve')
-                ax2.fill_between(result_data.index, 1000000.0, result_data['TotalAssets'], color='orange', alpha=0.1)
-                ax2.set_title("Portfolio Equity")
-                ax2.set_ylabel("Total Assets")
-                ax2.legend()
-                ax2.grid(True, alpha=0.3)
-                
-                st.pyplot(fig)
+    # --- 核心邏輯 ---
+    if st.session_state.mode_radio == "Individual Backtest":
+        st.sidebar.divider()
+        # 元件直接綁定 key
+        symbol = st.sidebar.text_input("Stock Symbol", key="symbol_input")
+        
+        start_date = st.sidebar.date_input("Start Date", value=datetime.date(2023, 1, 1))
+        end_date = st.sidebar.date_input("End Date", value=datetime.date.today())
+        
+        current_sym = st.session_state.symbol_input
+        stock_name = tw50_info.get(current_sym, recent_adjustments.get(current_sym, {}).get('name', ""))
+        display_title = f"{current_sym} {stock_name}" if stock_name else current_sym
+        
+        strategy_name = st.sidebar.selectbox("Select Strategy", ["Volume Price Breakout", "MA Crossover"])
+        
+        if strategy_name == "Volume Price Breakout":
+            with st.expander("💡 Strategy Design: Volume Price Breakout", expanded=True):
+                st.success("**量價突破**: 價格破20日高 + 成交量 > 1.5倍均量。出場：跌破10日低。")
+            pw = st.sidebar.slider("Price High Window", 5, 60, 20)
+            vm = st.sidebar.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
+            strategy_obj = VolumePriceBreakoutStrategy(price_window=pw, volume_multiplier=vm)
+        else:
+            with st.expander("💡 Strategy Design: MA Crossover", expanded=True):
+                st.success("**均線交叉**: 快線(5MA)向上穿過慢線(20MA)進場，反之出場。")
+            fma = st.sidebar.slider("Fast MA", 5, 20, 5)
+            sma = st.sidebar.slider("Slow MA", 20, 120, 20)
+            strategy_obj = MACrossoverStrategy(fast_ma=fma, slow_ma=sma)
 
-                # 交易明細清單
-                if not trades.empty:
-                    with st.expander("View Full Trade History"):
-                        st.dataframe(trades, use_container_width=True)
-                else:
-                    st.warning("No trades were executed with these parameters.")
+        # 檢查是否觸發回測
+        run_backtest_btn = st.sidebar.button("Run Backtest")
+        
+        if run_backtest_btn or st.session_state.trigger_backtest:
+            st.session_state.trigger_backtest = False
+            with st.spinner(f"Processing {display_title}..."):
+                df = fetch_stock_data(current_sym, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+                if df is not None:
+                    df_with_signals = strategy_obj.apply(df)
+                    backtester = Backtester()
+                    result_data, trades = backtester.run(df_with_signals)
+                    perf = backtester.calculate_performance(result_data)
+                    
+                    st.subheader(f"Results for {display_title}")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Return", f"{perf['Total Return (%)']:.2f}%")
+                    c2.metric("MDD", f"{perf['Max Drawdown (%)']:.2f}%")
+                    c3.metric("Trades", len(trades))
+                    
+                    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
+                    ax1.plot(result_data.index, result_data['Close'], label='Close Price', color='blue', alpha=0.5)
+                    if not trades.empty:
+                        buy = trades[trades['Type'] == 'BUY']
+                        sell = trades[trades['Type'] == 'SELL']
+                        ax1.scatter(buy['Date'], buy['Price'], marker='^', color='green', s=100, label='Buy')
+                        ax1.scatter(sell['Date'], sell['Price'], marker='v', color='red', s=100, label='Sell')
+                    ax1.set_title(f"Symbol: {current_sym} - Price and Signals")
+                    ax1.set_ylabel("Price (TWD)")
+                    ax1.legend(); ax1.grid(True, alpha=0.3); ax1.tick_params(labelbottom=True)
+                    
+                    ax2.plot(result_data.index, result_data['TotalAssets'], color='orange', label='Equity Curve')
+                    ax2.fill_between(result_data.index, 1000000.0, result_data['TotalAssets'], color='orange', alpha=0.1)
+                    ax2.set_title("Portfolio Equity"); ax2.set_ylabel("Total Assets"); ax2.legend(); ax2.grid(True, alpha=0.3)
+                    st.pyplot(fig)
+                    
+                    if not trades.empty:
+                        with st.expander("View Full Trade History"):
+                            st.dataframe(trades, use_container_width=True)
 
-else:
-    # 掃描大型股模式
-    st.sidebar.divider()
-    st.sidebar.subheader("Scanner Settings")
-    price_window = st.sidebar.slider("Price Window (for Breakout)", 5, 60, 20)
-    vol_mult = st.sidebar.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
-    scan_days = st.sidebar.slider("Scan Last X Days for Signals", 1, 10, 3)
+    else:
+        # --- Scanner Mode ---
+        st.sidebar.divider()
+        st.sidebar.subheader("Scanner Settings")
+        price_window = st.sidebar.slider("Price Window", 5, 60, 20)
+        vol_mult = st.sidebar.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
+        scan_days = st.sidebar.slider("Scan Last X Days", 1, 10, 3)
+        
+        if st.sidebar.button("Scan Taiwan 50 (Incl. Adjustments)"):
+            all_symbols = get_taiwan_50_symbols()
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            found_buy = []; found_sell = []
+            
+            end_dt = datetime.date.today()
+            start_dt = end_dt - datetime.timedelta(days=100)
+            strategy_obj = VolumePriceBreakoutStrategy(price_window=price_window, volume_multiplier=vol_mult)
+            
+            for i, sym in enumerate(all_symbols):
+                name = tw50_info.get(sym, recent_adjustments.get(sym, {}).get('name', "Unknown"))
+                status_text.text(f"Scanning {sym} {name} ({i+1}/{len(all_symbols)})")
+                progress_bar.progress((i + 1) / len(all_symbols))
+                
+                df = fetch_stock_data(sym, start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'))
+                if df is not None and len(df) > price_window:
+                    df_with_signals = strategy_obj.apply(df)
+                    df_with_signals['BuySignal'] = (df_with_signals['Position'] == 1) & (df_with_signals['Position'].shift(1) == 0)
+                    df_with_signals['SellSignal'] = (df_with_signals['Position'] <= 0) & (df_with_signals['Position'].shift(1) == 1)
+                    recent = df_with_signals.tail(scan_days)
+                    
+                    status_tag = recent_adjustments.get(sym, {}).get('type', 'normal')
+                    if recent['BuySignal'].any():
+                        found_buy.append({'Symbol': sym, 'Name': name, 'Status': status_tag, 'Date': ", ".join(recent[recent['BuySignal']].index.strftime('%Y-%m-%d')), 'Price': f"{df['Close'].iloc[-1]:.2f}", 'Volume': int(df['Volume'].iloc[-1])})
+                    if recent['SellSignal'].any():
+                        found_sell.append({'Symbol': sym, 'Name': name, 'Status': status_tag, 'Date': ", ".join(recent[recent['SellSignal']].index.strftime('%Y-%m-%d')), 'Price': f"{df['Close'].iloc[-1]:.2f}", 'Volume': int(df['Volume'].iloc[-1])})
+            
+            status_text.text("Scan Complete!")
+            def style_removed(row):
+                color = 'red' if row['Status'] == 'removed' else ''
+                return ['color: %s' % color] * len(row)
+
+            st.subheader("🚀 Potential Entry Points (Buy Signals)")
+            if found_buy: st.dataframe(pd.DataFrame(found_buy).style.apply(style_removed, axis=1), use_container_width=True)
+            else: st.info("No buy signals found.")
+
+            st.subheader("⚠️ Potential Exit Points (Sell Signals)")
+            if found_sell: st.dataframe(pd.DataFrame(found_sell).style.apply(style_removed, axis=1), use_container_width=True)
+            else: st.info("No sell signals found.")
+
+# --- 右側導航欄：快速跳轉 ---
+with nav_col:
+    st.subheader("Quick Select (TW50)")
+    st.write("Click to Backtest:")
+    all_nav_symbols = get_taiwan_50_symbols()
+    all_nav_symbols.sort()
     
-    if st.sidebar.button("Scan Top 50 Stocks"):
-        tw50_symbols = get_taiwan_50_symbols()
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        found_buy_signals = []
-        found_sell_signals = []
-        
-        end_dt = datetime.date.today()
-        start_dt = end_dt - datetime.timedelta(days=100)
-        
-        strategy_obj = VolumePriceBreakoutStrategy(price_window=price_window, volume_multiplier=vol_mult)
-        
-        for i, sym in enumerate(tw50_symbols):
-            status_text.text(f"Scanning {sym} {tw50_info.get(sym, '')} ({i+1}/{len(tw50_symbols)})")
-            progress_bar.progress((i + 1) / len(tw50_symbols))
+    for sym in all_nav_symbols:
+        name = tw50_info.get(sym, recent_adjustments.get(sym, {}).get('name', "???"))
+        adj_type = recent_adjustments.get(sym, {}).get('type', '')
+        btn_label = f"{sym} {name}" + (" (Del)" if adj_type == 'removed' else "")
             
-            df = fetch_stock_data(sym, start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'))
-            
-            if df is not None and len(df) > price_window:
-                df_with_signals = strategy_obj.apply(df)
-                
-                # 判定買入信號 (0 -> 1)
-                df_with_signals['BuySignal_Daily'] = (df_with_signals['Position'] == 1) & (df_with_signals['Position'].shift(1) == 0)
-                # 判定賣出信號 (1 -> 0 or -1)
-                df_with_signals['SellSignal_Daily'] = (df_with_signals['Position'] <= 0) & (df_with_signals['Position'].shift(1) == 1)
-                
-                recent_signals = df_with_signals.tail(scan_days)
-                
-                # 收集買入信號
-                if recent_signals['BuySignal_Daily'].any():
-                    signal_dates = recent_signals[recent_signals['BuySignal_Daily']].index.strftime('%Y-%m-%d').tolist()
-                    current_price = df['Close'].iloc[-1]
-                    found_buy_signals.append({
-                        'Symbol': sym,
-                        'Name': tw50_info.get(sym, "Unknown"),
-                        'Signal Date(s)': ", ".join(signal_dates),
-                        'Current Price': f"{current_price:.2f}",
-                        'Last Volume': int(df['Volume'].iloc[-1])
-                    })
-                
-                # 收集賣出信號
-                if recent_signals['SellSignal_Daily'].any():
-                    signal_dates = recent_signals[recent_signals['SellSignal_Daily']].index.strftime('%Y-%m-%d').tolist()
-                    current_price = df['Close'].iloc[-1]
-                    found_sell_signals.append({
-                        'Symbol': sym,
-                        'Name': tw50_info.get(sym, "Unknown"),
-                        'Signal Date(s)': ", ".join(signal_dates),
-                        'Current Price': f"{current_price:.2f}",
-                        'Reason': "Price fell below support"
-                    })
-        
-        status_text.text("Scan Complete!")
-        
-        # 顯示買入清單
-        st.subheader("🚀 Potential Entry Points (Buy Signals)")
-        if found_buy_signals:
-            st.success(f"Found {len(found_buy_signals)} stocks with recent breakout signals!")
-            st.table(pd.DataFrame(found_buy_signals))
-        else:
-            st.info("No breakout signals found in the selected range.")
-
-        # 顯示賣出清單
-        st.subheader("⚠️ Potential Exit Points (Sell Signals)")
-        if found_sell_signals:
-            st.warning(f"Found {len(found_sell_signals)} stocks showing exit signals!")
-            st.table(pd.DataFrame(found_sell_signals))
-        else:
-            st.info("No exit signals found in the selected range.")
-            
-        st.info("💡 You can switch to 'Individual Backtest' mode to see the detailed chart for these symbols.")
+        # 關鍵：使用 on_click 回呼函數，避免在渲染後修改狀態
+        st.button(
+            btn_label, 
+            key=f"nav_{sym}", 
+            use_container_width=True, 
+            on_click=handle_nav_click, 
+            args=(sym,)
+        )

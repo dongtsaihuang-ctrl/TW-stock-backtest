@@ -68,7 +68,7 @@ def fetch_stock_data(symbol, start_date, end_date):
 
 def get_taiwan_50_info():
     """
-    Returns a dictionary of Taiwan Top 50 symbols and their Chinese names.
+    Returns the current standard Taiwan Top 50 symbols and names.
     """
     return {
         '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '2308': '台達電', '2303': '聯電',
@@ -83,8 +83,22 @@ def get_taiwan_50_info():
         '2887': '台新金', '4938': '和碩', '6505': '台塑化', '9904': '寶成', '2409': '友達'
     }
 
+def get_recent_adjustments():
+    """
+    Returns symbols that were recently added or removed (within last 10 days).
+    Format: { symbol: {'name': name, 'type': 'added'|'removed', 'date': 'YYYY-MM-DD'} }
+    """
+    # 這裡可以根據實際權值股更動進行手動更新
+    # 範例：假設 2603 是最近新增，2409 是最近移除
+    return {
+        # '2603': {'name': '長榮', 'type': 'added', 'date': '2026-04-10'},
+        # '2409': {'name': '友達', 'type': 'removed', 'date': '2026-04-10'}
+    }
+
 def get_taiwan_50_symbols():
     """
-    Returns a list of symbols for Taiwan Top 50.
+    Returns a unique list of symbols to scan, including current components and recent adjustments.
     """
-    return list(get_taiwan_50_info().keys())
+    current = set(get_taiwan_50_info().keys())
+    adjustments = set(get_recent_adjustments().keys())
+    return list(current.union(adjustments))
