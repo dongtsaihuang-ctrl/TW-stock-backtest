@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import datetime
+import matplotlib.pyplot as plt
 from data_loader import fetch_stock_data, get_taiwan_50_symbols, get_taiwan_50_info
 from strategy import VolumePriceBreakoutStrategy, MACrossoverStrategy
 from backtester import Backtester
@@ -24,7 +25,7 @@ if mode == "Individual Backtest":
     start_date = st.sidebar.date_input("Start Date", value=datetime.date(2023, 1, 1))
     end_date = st.sidebar.date_input("End Date", value=datetime.date.today())
     
-    # 獲取顯示名稱
+    # 獲取顯示名稱 (用於 UI)
     stock_name = tw50_info.get(symbol, "")
     display_title = f"{symbol} {stock_name}" if stock_name else symbol
     
@@ -47,14 +48,14 @@ if mode == "Individual Backtest":
                 result_data, trades = backtester.run(df_with_signals)
                 perf = backtester.calculate_performance(result_data)
                 
+                # UI 標題可以使用中文
                 st.subheader(f"Results for {display_title}")
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Return", f"{perf['Total Return (%)']:.2f}%")
                 c2.metric("MDD", f"{perf['Max Drawdown (%)']:.2f}%")
                 c3.metric("Trades", len(trades))
                 
-                # 視覺化圖表
-                import matplotlib.pyplot as plt
+                # 視覺化圖表 - 內部標題避免使用中文以防崩潰
                 fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
                 
                 # 子圖 1: 價格與信號
@@ -62,24 +63,24 @@ if mode == "Individual Backtest":
                 if not trades.empty:
                     buy = trades[trades['Type'] == 'BUY']
                     sell = trades[trades['Type'] == 'SELL']
-                    ax1.scatter(buy['Date'], buy['Price'], marker='^', color='green', s=100, label='Buy Signal')
-                    ax1.scatter(sell['Date'], sell['Price'], marker='v', color='red', s=100, label='Sell Signal')
-                ax1.set_title(f"{display_title} Price and Trading Signals")
+                    ax1.scatter(buy['Date'], buy['Price'], marker='^', color='green', s=100, label='Buy')
+                    ax1.scatter(sell['Date'], sell['Price'], marker='v', color='red', s=100, label='Sell')
+                
+                # 圖表內部標題僅使用代碼
+                ax1.set_title(f"Symbol: {symbol} - Price and Signals")
                 ax1.set_ylabel("Price (TWD)")
                 ax1.legend()
                 ax1.grid(True, alpha=0.3)
-                # 強制顯示第一張圖的日期標籤
                 ax1.tick_params(labelbottom=True)
                 
-                # 子圖 2: 資產曲線 (Equity Curve)
+                # 子圖 2: 資產曲線
                 ax2.plot(result_data.index, result_data['TotalAssets'], color='orange', label='Equity Curve')
                 ax2.fill_between(result_data.index, 1000000.0, result_data['TotalAssets'], color='orange', alpha=0.1)
-                ax2.set_title("Portfolio Equity (Initial: 1M TWD)")
+                ax2.set_title("Portfolio Equity")
                 ax2.set_ylabel("Total Assets")
                 ax2.legend()
                 ax2.grid(True, alpha=0.3)
                 
-                plt.tight_layout()
                 st.pyplot(fig)
 
                 # 交易明細清單
@@ -90,7 +91,7 @@ if mode == "Individual Backtest":
                     st.warning("No trades were executed with these parameters.")
 
 else:
-    # 掃描大型股模式 (Signal Scanner)
+    # 掃描大型股模式
     st.sidebar.divider()
     st.sidebar.subheader("Scanner Settings")
     price_window = st.sidebar.slider("Price Window (for Breakout)", 5, 60, 20)
@@ -104,7 +105,6 @@ else:
         
         found_signals = []
         
-        # 設定抓取數據的日期範圍 (抓最近 100 天確保指標計算正確)
         end_dt = datetime.date.today()
         start_dt = end_dt - datetime.timedelta(days=100)
         
@@ -117,10 +117,7 @@ else:
             df = fetch_stock_data(sym, start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'))
             
             if df is not None and len(df) > price_window:
-                # 應用策略
                 df_with_signals = strategy_obj.apply(df)
-                
-                # 檢查最近幾天是否有買入信號
                 df_with_signals['BuySignal_Daily'] = (df_with_signals['Position'] == 1) & (df_with_signals['Position'].shift(1) == 0)
                 
                 recent_signals = df_with_signals.tail(scan_days)
