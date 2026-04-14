@@ -4,13 +4,6 @@ import sys
 import contextlib
 import os
 
-# Ensure output encoding is UTF-8 if possible
-if sys.stdout.encoding != 'utf-8':
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
-        pass
-
 def format_taiwan_symbol(symbol):
     """
     Format Taiwan stock symbols for yfinance.
@@ -49,26 +42,22 @@ def fetch_stock_data(symbol, start_date, end_date):
     symbols_to_try = format_taiwan_symbol(symbol)
     
     data = None
-    actual_symbol = None
     
-    print(f"Searching for symbol: {symbol} (Try: {symbols_to_try})")
+    # 在 Streamlit 環境下，print 會輸出到後台 log
+    # 這裡我們移除掉可能會導致編碼衝突的複雜 print
     
     for s in symbols_to_try:
         try:
-            # Use suppress_stdout_stderr to hide yfinance noise
             with suppress_stdout_stderr():
                 df = yf.download(s, start=start_date, end=end_date, progress=False)
             
             if df is not None and not df.empty:
                 data = df
-                actual_symbol = s
-                print(f"Successfully fetched data for: {s}")
                 break
-        except Exception as e:
+        except Exception:
             continue
             
     if data is None or data.empty:
-        print(f"Error: Could not fetch data for {symbol}. Please check the symbol.")
         return None
     
     # Flatten MultiIndex columns if present
@@ -99,8 +88,3 @@ def get_taiwan_50_symbols():
     Returns a list of symbols for Taiwan Top 50.
     """
     return list(get_taiwan_50_info().keys())
-
-if __name__ == "__main__":
-    df = fetch_stock_data('8299', '2023-01-01', '2024-01-01')
-    if df is not None:
-        print(df.head())
