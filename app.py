@@ -103,7 +103,8 @@ else:
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        found_signals = []
+        found_buy_signals = []
+        found_sell_signals = []
         
         end_dt = datetime.date.today()
         start_dt = end_dt - datetime.timedelta(days=100)
@@ -118,25 +119,54 @@ else:
             
             if df is not None and len(df) > price_window:
                 df_with_signals = strategy_obj.apply(df)
+                
+                # 判定買入信號 (0 -> 1)
                 df_with_signals['BuySignal_Daily'] = (df_with_signals['Position'] == 1) & (df_with_signals['Position'].shift(1) == 0)
+                # 判定賣出信號 (1 -> 0 or -1)
+                df_with_signals['SellSignal_Daily'] = (df_with_signals['Position'] <= 0) & (df_with_signals['Position'].shift(1) == 1)
                 
                 recent_signals = df_with_signals.tail(scan_days)
+                
+                # 收集買入信號
                 if recent_signals['BuySignal_Daily'].any():
                     signal_dates = recent_signals[recent_signals['BuySignal_Daily']].index.strftime('%Y-%m-%d').tolist()
                     current_price = df['Close'].iloc[-1]
-                    found_signals.append({
+                    found_buy_signals.append({
                         'Symbol': sym,
                         'Name': tw50_info.get(sym, "Unknown"),
                         'Signal Date(s)': ", ".join(signal_dates),
                         'Current Price': f"{current_price:.2f}",
                         'Last Volume': int(df['Volume'].iloc[-1])
                     })
+                
+                # 收集賣出信號
+                if recent_signals['SellSignal_Daily'].any():
+                    signal_dates = recent_signals[recent_signals['SellSignal_Daily']].index.strftime('%Y-%m-%d').tolist()
+                    current_price = df['Close'].iloc[-1]
+                    found_sell_signals.append({
+                        'Symbol': sym,
+                        'Name': tw50_info.get(sym, "Unknown"),
+                        'Signal Date(s)': ", ".join(signal_dates),
+                        'Current Price': f"{current_price:.2f}",
+                        'Reason': "Price fell below support"
+                    })
         
         status_text.text("Scan Complete!")
         
-        if found_signals:
-            st.success(f"Found {len(found_signals)} stocks with recent breakout signals!")
-            st.table(pd.DataFrame(found_signals))
-            st.info("You can switch to 'Individual Backtest' mode to see the detailed chart for these symbols.")
+        # 顯示買入清單
+        st.subheader("🚀 Potential Entry Points (Buy Signals)")
+        if found_buy_signals:
+            st.success(f"Found {len(found_buy_signals)} stocks with recent breakout signals!")
+            st.table(pd.DataFrame(found_buy_signals))
         else:
-            st.warning("No breakout signals found in the top 50 stocks for the selected criteria.")
+            st.info("No breakout signals found in the selected range.")
+
+        # 顯示賣出清單
+        st.subheader("⚠️ Potential Exit Points (Sell Signals)")
+        if found_sell_signals:
+            st.warning(f"Found {len(found_sell_signals)} stocks showing exit signals!")
+            st.table(pd.DataFrame(found_sell_signals))
+        else:
+            st.info("No exit signals found in the selected range.")
+            
+        st.info("💡 You can switch to 'Individual Backtest' mode to see the detailed chart for these symbols.")
