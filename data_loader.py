@@ -15,7 +15,6 @@ def format_taiwan_symbol(symbol):
         return [symbol]
     
     if symbol.isdigit():
-        # Try both suffixes if it's just a number
         return [f"{symbol}.TW", f"{symbol}.TWO"]
     
     return [symbol]
@@ -37,14 +36,9 @@ def suppress_stdout_stderr():
 def fetch_stock_data(symbol, start_date, end_date):
     """
     Fetch historical stock data from Yahoo Finance.
-    Automatically handles Taiwan stock suffixes.
     """
     symbols_to_try = format_taiwan_symbol(symbol)
-    
     data = None
-    
-    # 在 Streamlit 環境下，print 會輸出到後台 log
-    # 這裡我們移除掉可能會導致編碼衝突的複雜 print
     
     for s in symbols_to_try:
         try:
@@ -60,7 +54,6 @@ def fetch_stock_data(symbol, start_date, end_date):
     if data is None or data.empty:
         return None
     
-    # Flatten MultiIndex columns if present
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
         
@@ -86,18 +79,13 @@ def get_taiwan_50_info():
 def get_recent_adjustments():
     """
     Returns symbols that were recently added or removed (within last 10 days).
-    Format: { symbol: {'name': name, 'type': 'added'|'removed', 'date': 'YYYY-MM-DD'} }
     """
-    # 這裡可以根據實際權值股更動進行手動更新
-    # 範例：假設 2603 是最近新增，2409 是最近移除
-    return {
-        # '2603': {'name': '長榮', 'type': 'added', 'date': '2026-04-10'},
-        # '2409': {'name': '友達', 'type': 'removed', 'date': '2026-04-10'}
-    }
+    # 範例：'2603': {'name': '長榮', 'type': 'added', 'date': '2026-04-10'}
+    return {}
 
 def get_taiwan_50_symbols():
     """
-    Returns a unique list of symbols to scan, including current components and recent adjustments.
+    Returns a unique list of symbols to scan.
     """
     current = set(get_taiwan_50_info().keys())
     adjustments = set(get_recent_adjustments().keys())

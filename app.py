@@ -10,7 +10,7 @@ from backtester import Backtester
 st.set_page_config(page_title="Large-Cap Stock Monitor", layout="wide", page_icon="🔍")
 
 # --- 1. 定義回呼函數 (Callbacks) ---
-# 回呼函數會在腳本重新執行前執行，避免 StreamlitAPIException
+# 用於處理右側 Quick Select 點擊跳轉與回測觸發
 def handle_nav_click(symbol):
     st.session_state.symbol_input = symbol
     st.session_state.mode_radio = "Individual Backtest"
@@ -37,7 +37,7 @@ main_col, nav_col = st.columns([4, 1])
 with main_col:
     # 側邊欄：功能模式切換
     st.sidebar.header("Navigation")
-    # 元件直接綁定 key
+    # 元件直接與 key 綁定
     mode = st.sidebar.radio(
         "Choose Mode", 
         ["Signal Scanner (Top 50)", "Individual Backtest"], 
@@ -47,20 +47,29 @@ with main_col:
     # --- 模式說明展示 ---
     if st.session_state.mode_radio == "Signal Scanner (Top 50)":
         with st.expander("📖 Mode Description: Signal Scanner", expanded=True):
-            st.info("**掃描儀模式 (Signal Scanner)**: 快速篩選台灣 50 最近出現進場或出場訊號的股票。")
+            st.info("""
+            **掃描儀模式 (Signal Scanner)**:
+            - **目的**: 快速篩選出台灣 50 指數成分股中，最近出現進場或出場訊號的股票。
+            - **包含範圍**: 目前台灣 50 成分股，以及最近 10 天內新增或移除的股票。
+            """)
     else:
         with st.expander("📖 Mode Description: Individual Backtest", expanded=True):
-            st.info("**個股回測模式 (Individual Backtest)**: 針對單一股票進行深度策略回測與圖表分析。")
+            st.info("""
+            **個股回測模式 (Individual Backtest)**:
+            - **目的**: 針對單一股票進行深度的策略回測。
+            - **功能**: 自定義日期、參數。輸出：資產曲線、買賣點圖表以及交易明細。
+            """)
 
     # --- 核心邏輯 ---
     if st.session_state.mode_radio == "Individual Backtest":
         st.sidebar.divider()
-        # 元件直接綁定 key
+        # 直接與 key 綁定
         symbol = st.sidebar.text_input("Stock Symbol", key="symbol_input")
         
         start_date = st.sidebar.date_input("Start Date", value=datetime.date(2023, 1, 1))
         end_date = st.sidebar.date_input("End Date", value=datetime.date.today())
         
+        # 獲取顯示名稱
         current_sym = st.session_state.symbol_input
         stock_name = tw50_info.get(current_sym, recent_adjustments.get(current_sym, {}).get('name', ""))
         display_title = f"{current_sym} {stock_name}" if stock_name else current_sym
@@ -69,23 +78,33 @@ with main_col:
         
         if strategy_name == "Volume Price Breakout":
             with st.expander("💡 Strategy Design: Volume Price Breakout", expanded=True):
-                st.success("**量價突破**: 價格破20日高 + 成交量 > 1.5倍均量。出場：跌破10日低。")
+                st.success("""
+                **量價突破策略邏輯**:
+                - **進場**: 價格破 20 日高點且成交量 > 1.5 倍平均成交量。
+                - **出場**: 跌破 10 日最低點。
+                """)
             pw = st.sidebar.slider("Price High Window", 5, 60, 20)
             vm = st.sidebar.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
             strategy_obj = VolumePriceBreakoutStrategy(price_window=pw, volume_multiplier=vm)
         else:
             with st.expander("💡 Strategy Design: MA Crossover", expanded=True):
-                st.success("**均線交叉**: 快線(5MA)向上穿過慢線(20MA)進場，反之出場。")
+                st.success("""
+                **均線交叉策略邏輯**:
+                - **進場**: 快線 (5MA) 向上穿過慢線 (20MA)。
+                - **出場**: 快線向下穿過慢線。
+                """)
             fma = st.sidebar.slider("Fast MA", 5, 20, 5)
             sma = st.sidebar.slider("Slow MA", 20, 120, 20)
             strategy_obj = MACrossoverStrategy(fast_ma=fma, slow_ma=sma)
 
-        # 檢查是否觸發回測
+        # 回測按鈕
         run_backtest_btn = st.sidebar.button("Run Backtest")
         
         if run_backtest_btn or st.session_state.trigger_backtest:
+            # 執行後重置標記
             st.session_state.trigger_backtest = False
-            with st.spinner(f"Processing {display_title}..."):
+            
+            with st.spinner(f"Running backtest for {display_title}..."):
                 df = fetch_stock_data(current_sym, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
                 if df is not None:
                     df_with_signals = strategy_obj.apply(df)
@@ -99,6 +118,7 @@ with main_col:
                     c2.metric("MDD", f"{perf['Max Drawdown (%)']:.2f}%")
                     c3.metric("Trades", len(trades))
                     
+                    # 視覺化圖表
                     fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
                     ax1.plot(result_data.index, result_data['Close'], label='Close Price', color='blue', alpha=0.5)
                     if not trades.empty:
@@ -118,6 +138,8 @@ with main_col:
                     if not trades.empty:
                         with st.expander("View Full Trade History"):
                             st.dataframe(trades, use_container_width=True)
+                else:
+                    st.error("Data fetch failed. Please check symbol.")
 
     else:
         # --- Scanner Mode ---
@@ -127,7 +149,7 @@ with main_col:
         vol_mult = st.sidebar.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
         scan_days = st.sidebar.slider("Scan Last X Days", 1, 10, 3)
         
-        if st.sidebar.button("Scan Taiwan 50 (Incl. Adjustments)"):
+        if st.sidebar.button("Scan Taiwan 50"):
             all_symbols = get_taiwan_50_symbols()
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -150,6 +172,7 @@ with main_col:
                     recent = df_with_signals.tail(scan_days)
                     
                     status_tag = recent_adjustments.get(sym, {}).get('type', 'normal')
+                    
                     if recent['BuySignal'].any():
                         found_buy.append({'Symbol': sym, 'Name': name, 'Status': status_tag, 'Date': ", ".join(recent[recent['BuySignal']].index.strftime('%Y-%m-%d')), 'Price': f"{df['Close'].iloc[-1]:.2f}", 'Volume': int(df['Volume'].iloc[-1])})
                     if recent['SellSignal'].any():
@@ -180,7 +203,7 @@ with nav_col:
         adj_type = recent_adjustments.get(sym, {}).get('type', '')
         btn_label = f"{sym} {name}" + (" (Del)" if adj_type == 'removed' else "")
             
-        # 關鍵：使用 on_click 回呼函數，避免在渲染後修改狀態
+        # 使用 on_click 回呼函數安全更新狀態
         st.button(
             btn_label, 
             key=f"nav_{sym}", 
