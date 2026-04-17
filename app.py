@@ -74,19 +74,20 @@ with main_col:
         stock_name = tw50_info.get(current_sym, recent_adjustments.get(current_sym, {}).get('name', ""))
         display_title = f"{current_sym} {stock_name}" if stock_name else current_sym
         
-        strategy_name = st.sidebar.selectbox("Select Strategy", ["Volume Price Breakout", "MA Crossover"])
+        strategy_name = st.sidebar.selectbox("Select Strategy", ["Volume Price Breakout", "MA Crossover", "Institutional Trend Following"])
         
         if strategy_name == "Volume Price Breakout":
             with st.expander("💡 Strategy Design: Volume Price Breakout", expanded=True):
                 st.success("""
                 **量價突破策略邏輯**:
-                - **進場**: 價格破 20 日高點且成交量 > 1.5 倍平均成交量。
-                - **出場**: 跌破 10 日最低點。
+                - **進場**: 價格破 N 日高點且成交量 > M 倍平均成交量。
+                - **出場**: 跌破 X 日最低點。
                 """)
-            pw = st.sidebar.slider("Price High Window", 5, 60, 20)
-            vm = st.sidebar.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
-            strategy_obj = VolumePriceBreakoutStrategy(price_window=pw, volume_multiplier=vm)
-        else:
+            pw = st.sidebar.slider("Price High Window (N)", 5, 60, 20)
+            vm = st.sidebar.slider("Volume Multiplier (M)", 1.0, 3.0, 1.5, 0.1)
+            ew = st.sidebar.slider("Exit Low Window (X)", 3, 30, 10)
+            strategy_obj = VolumePriceBreakoutStrategy(price_window=pw, volume_multiplier=vm, exit_window=ew)
+        elif strategy_name == "MA Crossover":
             with st.expander("💡 Strategy Design: MA Crossover", expanded=True):
                 st.success("""
                 **均線交叉策略邏輯**:
@@ -96,6 +97,17 @@ with main_col:
             fma = st.sidebar.slider("Fast MA", 5, 20, 5)
             sma = st.sidebar.slider("Slow MA", 20, 120, 20)
             strategy_obj = MACrossoverStrategy(fast_ma=fma, slow_ma=sma)
+        else:
+            with st.expander("💡 Strategy Design: Institutional Trend Following", expanded=True):
+                st.success("""
+                **三大法人籌碼策略邏輯**:
+                - **進場**: 外資與投信合計買超連續 N 天，且收盤價 > 20MA。
+                - **出場**: 法人合計買超轉賣，或股價跌破 20MA。
+                """)
+            nbd = st.sidebar.slider("Consecutive Net Buy Days", 1, 10, 3)
+            maw = st.sidebar.slider("MA Window (Trend)", 5, 60, 20)
+            from strategy import InstitutionalStrategy
+            strategy_obj = InstitutionalStrategy(net_buy_days=nbd, ma_window=maw)
 
         # 回測按鈕
         run_backtest_btn = st.sidebar.button("Run Backtest")
@@ -110,11 +122,18 @@ with main_col:
                     df_with_signals = strategy_obj.apply(df)
                     backtester = Backtester()
                     result_data, trades = backtester.run(df_with_signals)
-                    perf = backtester.calculate_performance(result_data)
+                    perf = backtester.calculate_performance(result_data, trades)
                     
                     st.subheader(f"Results for {display_title}")
                     c1, c2, c3 = st.columns(3)
-                    c1.metric("Return", f"{perf['Total Return (%)']:.2f}%")
+                    
+                    # 報酬率顯示邏輯：如果部位未平倉，顯示 "已實現 (含未實現)"
+                    if perf.get('IsOpen', False):
+                        return_text = f"{perf['Realized Return (%)']:.2f}% ({perf['Total Return (%)']:.2f}%)"
+                        c1.metric("Return (Realized / Total)", return_text)
+                    else:
+                        c1.metric("Return", f"{perf['Total Return (%)']:.2f}%")
+                        
                     c2.metric("MDD", f"{perf['Max Drawdown (%)']:.2f}%")
                     c3.metric("Trades", len(trades))
                     
@@ -143,10 +162,19 @@ with main_col:
 
     else:
         # --- Scanner Mode ---
+        with st.expander("💡 Scanner Strategy: Volume Price Breakout", expanded=True):
+            st.info("""
+            **目前掃描策略：量價突破 (Volume Price Breakout)**
+            - **進場 (Buy)**: 股價創 N 日新高，且成交量達 5 日均量 M 倍。
+            - **出場 (Sell)**: 股價跌破 X 日最低點。
+            - **掃描範圍**: 尋找在最近幾天內「剛觸發」訊號的股票。
+            """)
+            
         st.sidebar.divider()
         st.sidebar.subheader("Scanner Settings")
-        price_window = st.sidebar.slider("Price Window", 5, 60, 20)
-        vol_mult = st.sidebar.slider("Volume Multiplier", 1.0, 3.0, 1.5, 0.1)
+        price_window = st.sidebar.slider("Price High Window (N)", 5, 60, 20)
+        vol_mult = st.sidebar.slider("Volume Multiplier (M)", 1.0, 3.0, 1.5, 0.1)
+        exit_window = st.sidebar.slider("Exit Low Window (X)", 3, 30, 10)
         scan_days = st.sidebar.slider("Scan Last X Days", 1, 10, 3)
         
         if st.sidebar.button("Scan Taiwan 50"):
@@ -155,9 +183,10 @@ with main_col:
             status_text = st.empty()
             found_buy = []; found_sell = []
             
+            # 增加抓取天數，確保指標計算正確 (至少要比 price_window 多)
             end_dt = datetime.date.today()
-            start_dt = end_dt - datetime.timedelta(days=100)
-            strategy_obj = VolumePriceBreakoutStrategy(price_window=price_window, volume_multiplier=vol_mult)
+            start_dt = end_dt - datetime.timedelta(days=150)
+            strategy_obj = VolumePriceBreakoutStrategy(price_window=price_window, volume_multiplier=vol_mult, exit_window=exit_window)
             
             for i, sym in enumerate(all_symbols):
                 name = tw50_info.get(sym, recent_adjustments.get(sym, {}).get('name', "Unknown"))
@@ -165,18 +194,23 @@ with main_col:
                 progress_bar.progress((i + 1) / len(all_symbols))
                 
                 df = fetch_stock_data(sym, start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'))
-                if df is not None and len(df) > price_window:
+                if df is not None and len(df) > max(price_window, exit_window):
                     df_with_signals = strategy_obj.apply(df)
-                    df_with_signals['BuySignal'] = (df_with_signals['Position'] == 1) & (df_with_signals['Position'].shift(1) == 0)
-                    df_with_signals['SellSignal'] = (df_with_signals['Position'] <= 0) & (df_with_signals['Position'].shift(1) == 1)
-                    recent = df_with_signals.tail(scan_days)
                     
+                    # 判定「剛觸發」：今天 Position=1 且 昨天 Position=0
+                    df_with_signals['BuyTrigger'] = (df_with_signals['Position'] == 1) & (df_with_signals['Position'].shift(1) == 0)
+                    # 判定「剛賣出」：昨天 Position=1 且 今天 Position <= 0
+                    df_with_signals['SellTrigger'] = (df_with_signals['Position'] <= 0) & (df_with_signals['Position'].shift(1) == 1)
+                    
+                    recent = df_with_signals.tail(scan_days)
                     status_tag = recent_adjustments.get(sym, {}).get('type', 'normal')
                     
-                    if recent['BuySignal'].any():
-                        found_buy.append({'Symbol': sym, 'Name': name, 'Status': status_tag, 'Date': ", ".join(recent[recent['BuySignal']].index.strftime('%Y-%m-%d')), 'Price': f"{df['Close'].iloc[-1]:.2f}", 'Volume': int(df['Volume'].iloc[-1])})
-                    if recent['SellSignal'].any():
-                        found_sell.append({'Symbol': sym, 'Name': name, 'Status': status_tag, 'Date': ", ".join(recent[recent['SellSignal']].index.strftime('%Y-%m-%d')), 'Price': f"{df['Close'].iloc[-1]:.2f}", 'Volume': int(df['Volume'].iloc[-1])})
+                    if recent['BuyTrigger'].any():
+                        trigger_date = recent[recent['BuyTrigger']].index[-1].strftime('%Y-%m-%d')
+                        found_buy.append({'Symbol': sym, 'Name': name, 'Status': status_tag, 'Date': trigger_date, 'Price': f"{df['Close'].iloc[-1]:.2f}", 'Volume': int(df['Volume'].iloc[-1])})
+                    if recent['SellTrigger'].any():
+                        trigger_date = recent[recent['SellTrigger']].index[-1].strftime('%Y-%m-%d')
+                        found_sell.append({'Symbol': sym, 'Name': name, 'Status': status_tag, 'Date': trigger_date, 'Price': f"{df['Close'].iloc[-1]:.2f}", 'Reason': "Broken Support"})
             
             status_text.text("Scan Complete!")
             def style_removed(row):

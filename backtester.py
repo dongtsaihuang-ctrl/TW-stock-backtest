@@ -77,12 +77,35 @@ class Backtester:
 
         return data, pd.DataFrame(trades)
 
-    def calculate_performance(self, data):
+    def calculate_performance(self, data, trades_df):
         """
         Calculate performance metrics.
         """
+        # 總報酬率 (包含最後一段未實現的部位)
         total_return = (data['TotalAssets'].iloc[-1] / self.initial_capital) - 1
         
+        # 已實現報酬率 (只算到最後一次賣出)
+        if not trades_df.empty and (trades_df['Type'].iloc[-1] == 'SELL'):
+            realized_return = total_return
+            is_open = False
+        elif not trades_df.empty and (trades_df['Type'].iloc[-1] == 'BUY'):
+            # 如果最後一筆是買入，尋找上一次賣出時的資產
+            sell_trades = trades_df[trades_df['Type'] == 'SELL']
+            if not sell_trades.empty:
+                last_sell_date = sell_trades['Date'].iloc[-1]
+                # 找到賣出當天的總資產
+                realized_assets = data.loc[last_sell_date, 'TotalAssets']
+                if isinstance(realized_assets, pd.Series):
+                    realized_assets = realized_assets.iloc[-1]
+                realized_return = (realized_assets / self.initial_capital) - 1
+            else:
+                # 從來沒有賣出過
+                realized_return = 0.0
+            is_open = True
+        else:
+            realized_return = total_return
+            is_open = False
+
         # Max Drawdown (MDD)
         equity = data['TotalAssets']
         rolling_max = equity.cummax()
@@ -91,6 +114,8 @@ class Backtester:
         
         return {
             'Total Return (%)': total_return * 100,
+            'Realized Return (%)': realized_return * 100,
             'Max Drawdown (%)': max_drawdown * 100,
-            'Ending Capital': data['TotalAssets'].iloc[-1]
+            'Ending Capital': data['TotalAssets'].iloc[-1],
+            'IsOpen': is_open
         }
